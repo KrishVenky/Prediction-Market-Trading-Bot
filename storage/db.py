@@ -1,0 +1,215 @@
+"""
+SQLite Storage Layer
+--------------------
+Single source of truth for all pipeline runs, signals, and results.
+Uses raw sqlite3 (no ORM) with a threading.Lock for safe writes from
+the pipeline threadpool.
+
+Call `init_db()` once at server startup.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+import threading
+from pathlib import Path
+
+DB_PATH = Path(__file__).parent.parent / "polysignal.db"
+_lock = threading.Lock()
+
+
+# ── Connection factory ─────────────────────────────────────────────────────────
+
+def _conn() -> sqlite3.Connection:
+    c = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c.row_factory = sqlite3.Row
+    c.execute("PRAGMA journal_mode=WAL")   # better concurrent reads
+    return c
+
+
+# ── Schema init ────────────────────────────────────────────────────────────────
+
+def init_db() -> None:
+    with _lock, _conn() as c:
+        c.executescript("""
+            CREATE TABLE IF NOT EXISTS runs (
+                id          TEXT PRIMARY KEY,
+                topic       TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'running',
+                created_at  TEXT NOT NULL,
+                finished_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS raw_signals (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id      TEXT NOT NULL,
+                source      TEXT,
+                url         TEXT,
+                title       TEXT,
+                text        TEXT,
+                published   TEXT,
+                tags        TEXT,
+                scraped_at  TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS parsed_signals (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id      TEXT NOT NULL,
+                source      TEXT,
+                url         TEXT,
+                title       TEXT,
+                event       TEXT,
+                sentiment   TEXT,
+                relevance   REAL,
+                signal_text TEXT,
+                trust_score REAL
+            );
+
+            CREATE TABLE IF NOT EXISTS results (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id       TEXT NOT NULL,
+                position     TEXT,
+                confidence   REAL,
+                market_price REAL,
+                edge         REAL,
+                reasoning    TEXT,
+                bull         TEXT,
+                bear         TEXT,
+                verdict      TEXT,
+                final_output TEXT,
+                created_at   TEXT NOT NULL
+            );
+        """)
+
+
+# ── Runs ───────────────────────────────────────────────────────────────────────
+
+def create_run(run_id: str, topic: str, created_at: str) -> None:
+    with _lock, _conn() as c:
+        c.execute(
+            "INSERT INTO runs (id, topic, status, created_at) VALUES (?,?,?,?)",
+            (run_id, topic, "running", created_at),
+        )
+
+
+def finish_run(run_id: str, status: str, finished_at: str) -> None:
+    with _lock, _conn() as c:
+        c.execute(
+            "UPDATE runs SET status=?, finished_at=? WHERE id=?",
+            (status, finished_at, run_id),
+        )
+
+
+def get_runs(limit: int = 20) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_run(run_id: str) -> dict | None:
+    with _conn() as c:
+        row = c.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+    return dict(row) if row else None
+
+
+# ── Raw signals ────────────────────────────────────────────────────────────────
+
+def insert_raw_signals(run_id: str, signals: list, scraped_at: str) -> None:
+    rows = [
+        (
+            run_id,
+            s.source,
+            s.url,
+            s.title,
+            s.text[:500],
+            s.published.isoformat() if s.published else None,
+            ",".join(s.tags),
+            scraped_at,
+        )
+        for s in signals
+    ]
+    with _lock, _conn() as c:
+        c.executemany(
+            "INSERT INTO raw_signals (run_id,source,url,title,text,published,tags,scraped_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            rows,
+        )
+
+
+def get_raw_signals(run_id: str) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM raw_signals WHERE run_id=? ORDER BY id", (run_id,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Parsed signals ─────────────────────────────────────────────────────────────
+
+def insert_parsed_signals(run_id: str, signals: list[dict]) -> None:
+    rows = [
+        (
+            run_id,
+            s.get("source"),
+            s.get("url"),
+            s.get("title"),
+            s.get("event"),
+            s.get("sentiment"),
+            s.get("relevance"),
+            s.get("signal"),
+            s.get("trust_score"),
+        )
+        for s in signals
+    ]
+    with _lock, _conn() as c:
+        c.executemany(
+            "INSERT INTO parsed_signals "
+            "(run_id,source,url,title,event,sentiment,relevance,signal_text,trust_score) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            rows,
+        )
+
+
+def get_parsed_signals(run_id: str) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM parsed_signals WHERE run_id=? ORDER BY trust_score DESC",
+            (run_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Results ────────────────────────────────────────────────────────────────────
+
+def insert_result(run_id: str, state: dict, created_at: str) -> None:
+    debate = state.get("debate_result", {})
+    with _lock, _conn() as c:
+        c.execute(
+            "INSERT INTO results "
+            "(run_id,position,confidence,market_price,edge,reasoning,bull,bear,verdict,final_output,created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                run_id,
+                debate.get("position"),
+                state.get("confidence_score"),
+                0.5,                        # market_price not yet in state — default 0.5
+                state.get("edge"),
+                "",
+                debate.get("bull", "")[:800],
+                debate.get("bear", "")[:800],
+                debate.get("verdict", "")[:800],
+                state.get("final_output", "")[:3000],
+                created_at,
+            ),
+        )
+
+
+def get_result(run_id: str) -> dict | None:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT * FROM results WHERE run_id=? ORDER BY id DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+    return dict(row) if row else None

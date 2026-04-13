@@ -1,5 +1,30 @@
+# ── Scraping ──────────────────────────────────────────────────────────────────
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
-# Optional: only needed if Nitter instances are all down
+feedparser>=6.0.11
+
+# Optional — only needed for twitter_scraper.py Playwright strategies
 playwright>=1.44.0
+
+# ── LLM / AI Stack ────────────────────────────────────────────────────────────
+langchain>=0.2.0
+langchain-core>=0.2.0
+langchain-google-genai>=1.0.7
+langchain-community>=0.2.16
+langgraph>=0.2.0
+
+# ── CrewAI ────────────────────────────────────────────────────────────────────
+crewai>=0.63.0
+
+# ── Web server ────────────────────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+sse-starlette>=1.8.2
+pydantic>=2.0.0
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest>=8.0.0

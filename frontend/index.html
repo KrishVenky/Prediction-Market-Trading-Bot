@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PolySignal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');
+    * { font-family: 'JetBrains Mono', monospace; }
+
+    :root {
+      --bg:      #0b0d12;
+      --surface: #13161e;
+      --border:  #1e2330;
+      --muted:   #3a3f52;
+      --text:    #c8cdd8;
+      --bright:  #e8ecf4;
+      --green:   #22d3a5;
+      --red:     #f05a6e;
+      --yellow:  #f5c542;
+      --blue:    #5b8df5;
+      --purple:  #a78bfa;
+    }
+
+    body { background: var(--bg); color: var(--text); }
+
+    .card   { background: var(--surface); border: 1px solid var(--border); }
+    .badge  { font-size: 0.65rem; padding: 1px 6px; border-radius: 3px; font-weight: 700; letter-spacing: 0.05em; }
+    .b-bull { background: #0d2e22; color: var(--green); border: 1px solid #1a5c42; }
+    .b-bear { background: #2e0d12; color: var(--red);   border: 1px solid #5c1a22; }
+    .b-neut { background: #1e1e0d; color: var(--yellow);border: 1px solid #5c520d; }
+    .b-src  { background: #0d1a2e; color: var(--blue);  border: 1px solid #1a3a5c; }
+
+    .node-step { border-left: 2px solid var(--border); }
+    .node-step.done    { border-left-color: var(--green); }
+    .node-step.running { border-left-color: var(--yellow); }
+    .node-step.idle    { border-left-color: var(--muted); }
+
+    .pulse { animation: pulse 1.2s cubic-bezier(.4,0,.6,1) infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+    .bar-bg  { background: var(--border); border-radius: 2px; height: 4px; }
+    .bar-fill { height: 4px; border-radius: 2px; transition: width .6s ease; }
+    .bar-green  { background: var(--green); }
+    .bar-yellow { background: var(--yellow); }
+    .bar-red    { background: var(--red); }
+
+    #log-panel { max-height: 520px; overflow-y: auto; scroll-behavior: smooth; }
+    #log-panel::-webkit-scrollbar { width: 4px; }
+    #log-panel::-webkit-scrollbar-track { background: var(--bg); }
+    #log-panel::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 4px; }
+
+    .signal-card:hover { border-color: var(--blue); transition: border-color .15s; }
+
+    .pos-yes    { color: var(--green);  }
+    .pos-no     { color: var(--red);    }
+    .pos-abstain{ color: var(--yellow); }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <header class="border-b" style="border-color:var(--border)">
+    <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-2 h-2 rounded-full bg-green-400 pulse" id="status-dot"></div>
+        <span class="text-lg font-bold" style="color:var(--bright)">POLY<span style="color:var(--blue)">SIGNAL</span></span>
+        <span class="text-xs" style="color:var(--muted)">prediction market intelligence</span>
+      </div>
+      <div class="flex items-center gap-4 text-xs" style="color:var(--muted)">
+        <span>LangGraph</span><span>·</span>
+        <span>Gemini Flash</span><span>·</span>
+        <span>CrewAI</span><span>·</span>
+        <span>qwen2.5:14b</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-6 py-6 space-y-6">
+
+    <!-- ── Topic input ──────────────────────────────────────────────────── -->
+    <div class="card rounded-lg p-5">
+      <label class="block text-xs mb-2" style="color:var(--muted)">PREDICTION MARKET QUESTION</label>
+      <div class="flex gap-3">
+        <input id="topic-input" type="text"
+          placeholder="Will the Fed cut rates before July 2025?"
+          class="flex-1 rounded px-4 py-2 text-sm focus:outline-none"
+          style="background:#0f1117;border:1px solid var(--border);color:var(--bright)"
+        />
+        <button id="run-btn" onclick="startRun()"
+          class="px-6 py-2 rounded text-sm font-bold transition-all"
+          style="background:var(--blue);color:#fff">
+          ▶ RUN ANALYSIS
+        </button>
+      </div>
+      <div class="flex gap-2 mt-3 flex-wrap" id="quick-topics">
+        <!-- populated by JS -->
+      </div>
+    </div>
+
+    <!-- ── Main grid ────────────────────────────────────────────────────── -->
+    <div class="grid grid-cols-3 gap-6">
+
+      <!-- Left: pipeline log -->
+      <div class="col-span-1 space-y-4">
+        <div class="card rounded-lg p-4">
+          <h2 class="text-xs font-bold mb-4" style="color:var(--muted)">PIPELINE  ·  LANGGRAPH</h2>
+          <div class="space-y-3" id="pipeline-steps">
+            <!-- built by JS -->
+          </div>
+        </div>
+
+        <!-- History panel -->
+        <div class="card rounded-lg p-4">
+          <h2 class="text-xs font-bold mb-3" style="color:var(--muted)">RECENT RUNS</h2>
+          <div id="runs-list" class="space-y-2 text-xs" style="color:var(--muted)">
+            <p>No runs yet.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Center+Right: signals + result -->
+      <div class="col-span-2 space-y-4">
+
+        <!-- Signal cards -->
+        <div class="card rounded-lg p-4">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-xs font-bold" style="color:var(--muted)">LIVE SIGNALS</h2>
+            <span id="signal-count" class="text-xs" style="color:var(--muted)">—</span>
+          </div>
+          <div id="signals-grid" class="space-y-3">
+            <p class="text-xs" style="color:var(--muted)">Signals will appear here after fetch + parse nodes complete.</p>
+          </div>
+        </div>
+
+        <!-- Result card -->
+        <div id="result-card" class="card rounded-lg p-5" style="display:none">
+          <h2 class="text-xs font-bold mb-4" style="color:var(--muted)">INTELLIGENCE REPORT</h2>
+
+          <div class="flex items-start justify-between mb-5">
+            <div>
+              <div class="text-3xl font-bold mb-1" id="res-position">—</div>
+              <p class="text-xs" style="color:var(--muted)" id="res-reasoning"></p>
+            </div>
+            <div class="text-right space-y-1">
+              <div class="text-xs" style="color:var(--muted)">CONFIDENCE</div>
+              <div class="text-xl font-bold" id="res-confidence" style="color:var(--bright)">—</div>
+              <div class="text-xs" id="res-edge">edge —</div>
+            </div>
+          </div>
+
+          <!-- Confidence bar -->
+          <div class="bar-bg mb-5">
+            <div class="bar-fill bar-green" id="conf-bar" style="width:0%"></div>
+          </div>
+
+          <div class="grid grid-cols-3 gap-4 text-xs">
+            <div>
+              <div class="font-bold mb-2" style="color:var(--green)">▲ BULL CASE</div>
+              <p id="res-bull" style="color:var(--text);line-height:1.6"></p>
+            </div>
+            <div>
+              <div class="font-bold mb-2" style="color:var(--red)">▼ BEAR CASE</div>
+              <p id="res-bear" style="color:var(--text);line-height:1.6"></p>
+            </div>
+            <div>
+              <div class="font-bold mb-2" style="color:var(--purple)">⚖ ARBITER</div>
+              <p id="res-verdict" style="color:var(--text);line-height:1.6"></p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Log stream -->
+        <div class="card rounded-lg p-4">
+          <h2 class="text-xs font-bold mb-3" style="color:var(--muted)">EVENT LOG</h2>
+          <div id="log-panel" class="text-xs space-y-1" style="color:var(--muted)">
+            <p>Waiting for pipeline…</p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // ── Config ──────────────────────────────────────────────────────────────
+    const API = 'http://localhost:8000';
+    const QUICK = [
+      "Will the Fed cut rates before July 2025?",
+      "Will Trump tariffs cause a US recession in 2025?",
+      "Will Bitcoin hit $100k before end of 2025?",
+      "Will there be a US government shutdown in 2025?",
+    ];
+
+    const NODES = [
+      { id: 'fetch',  label: 'FETCH',  sub: 'RSS scraper' },
+      { id: 'parse',  label: 'PARSE',  sub: 'Gemini Flash' },
+      { id: 'debate', label: 'DEBATE', sub: 'CrewAI agents' },
+      { id: 'score',  label: 'SCORE',  sub: 'Confidence + edge' },
+    ];
+
+    let currentRunId = null;
+    let currentSSE   = null;
+
+    // ── Boot ────────────────────────────────────────────────────────────────
+    document.addEventListener('DOMContentLoaded', () => {
+      renderPipelineSteps();
+      renderQuickTopics();
+      loadRuns();
+    });
+
+    // ── Quick topics ────────────────────────────────────────────────────────
+    function renderQuickTopics() {
+      const el = document.getElementById('quick-topics');
+      el.innerHTML = QUICK.map(t =>
+        `<button onclick="setTopic(this)" class="text-xs px-3 py-1 rounded transition-all"
+          style="background:var(--border);color:var(--text)" data-topic="${t}">${t.slice(0,55)}…</button>`
+      ).join('');
+    }
+    function setTopic(btn) {
+      document.getElementById('topic-input').value = btn.dataset.topic;
+    }
+
+    // ── Pipeline step UI ────────────────────────────────────────────────────
+    function renderPipelineSteps() {
+      const el = document.getElementById('pipeline-steps');
+      el.innerHTML = NODES.map(n => `
+        <div id="step-${n.id}" class="node-step idle pl-3 py-2">
+          <div class="flex items-center justify-between">
+            <div>
+              <span class="text-xs font-bold" style="color:var(--bright)">${n.label}</span>
+              <span class="text-xs ml-2" style="color:var(--muted)">${n.sub}</span>
+            </div>
+            <span id="step-icon-${n.id}" class="text-xs" style="color:var(--muted)">○</span>
+          </div>
+          <div id="step-msg-${n.id}" class="text-xs mt-1" style="color:var(--muted);display:none"></div>
+        </div>
+      `).join('');
+    }
+
+    function setNodeState(nodeId, state, msg) {
+      const el   = document.getElementById(`step-${nodeId}`);
+      const icon = document.getElementById(`step-icon-${nodeId}`);
+      const msgEl= document.getElementById(`step-msg-${nodeId}`);
+      el.className = `node-step ${state} pl-3 py-2`;
+      if (state === 'running') {
+        icon.innerHTML = `<span class="pulse" style="color:var(--yellow)">⟳</span>`;
+      } else if (state === 'done') {
+        icon.innerHTML = `<span style="color:var(--green)">✓</span>`;
+      }
+      if (msg) { msgEl.textContent = msg; msgEl.style.display = 'block'; }
+    }
+
+    // ── Start run ────────────────────────────────────────────────────────────
+    async function startRun() {
+      const topic = document.getElementById('topic-input').value.trim();
+      if (!topic) { alert('Enter a topic first.'); return; }
+
+      // Reset UI
+      renderPipelineSteps();
+      document.getElementById('signals-grid').innerHTML =
+        '<p class="text-xs" style="color:var(--muted)">Fetching signals…</p>';
+      document.getElementById('result-card').style.display = 'none';
+      document.getElementById('signal-count').textContent = '—';
+      clearLog();
+      addLog('Starting pipeline…');
+
+      const btn = document.getElementById('run-btn');
+      btn.disabled = true;
+      btn.textContent = '⟳ RUNNING…';
+      document.getElementById('status-dot').style.background = 'var(--yellow)';
+
+      if (currentSSE) { currentSSE.close(); }
+
+      try {
+        const res = await fetch(`${API}/api/run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ topic }),
+        });
+        const data = await res.json();
+        currentRunId = data.run_id;
+        addLog(`Run ID: ${currentRunId.slice(0,8)}…`);
+        openSSE(currentRunId);
+      } catch (e) {
+        addLog(`ERROR: ${e.message}`, 'red');
+        resetBtn();
+      }
+    }
+
+    // ── SSE consumer ─────────────────────────────────────────────────────────
+    function openSSE(runId) {
+      const es = new EventSource(`${API}/api/run/${runId}/stream`);
+      currentSSE = es;
+
+      es.addEventListener('node_start', e => {
+        const d = JSON.parse(e.data);
+        setNodeState(d.node, 'running', d.message);
+        addLog(`[${d.node.toUpperCase()}] ${d.message}`);
+      });
+
+      es.addEventListener('node_done', e => {
+        const d = JSON.parse(e.data);
+        setNodeState(d.node, 'done');
+
+        if (d.node === 'fetch') {
+          addLog(`[FETCH] ${d.count} signals from ${(d.sources||[]).join(', ')}`);
+        }
+        if (d.node === 'parse' && d.signals) {
+          renderSignals(d.signals);
+          addLog(`[PARSE] ${d.count} relevant signals identified`);
+        }
+        if (d.node === 'debate') {
+          addLog(`[DEBATE] Position: ${d.position}`);
+          addLog(`[ARBITER] ${(d.verdict||'').slice(0,100)}…`);
+        }
+        if (d.node === 'score') {
+          addLog(`[SCORE] Confidence ${(d.confidence*100).toFixed(1)}%  Edge ${d.edge>0?'+':''}${(d.edge*100).toFixed(1)}%`);
+        }
+      });
+
+      es.addEventListener('complete', e => {
+        const d = JSON.parse(e.data);
+        renderResult(d, runId);
+        addLog('Pipeline complete ✓', 'green');
+        resetBtn(true);
+        document.getElementById('status-dot').style.background = 'var(--green)';
+        loadRuns();
+        es.close();
+      });
+
+      es.addEventListener('error', e => {
+        const d = e.data ? JSON.parse(e.data) : {};
+        addLog(`ERROR: ${d.message || 'pipeline failed'}`, 'red');
+        resetBtn();
+        es.close();
+      });
+
+      es.addEventListener('done', () => { es.close(); });
+      es.onerror = () => { es.close(); };
+    }
+
+    // ── Render signals ────────────────────────────────────────────────────────
+    function renderSignals(signals) {
+      const grid = document.getElementById('signals-grid');
+      document.getElementById('signal-count').textContent = `${signals.length} signal${signals.length!==1?'s':''}`;
+
+      if (!signals.length) {
+        grid.innerHTML = '<p class="text-xs" style="color:var(--muted)">No signals found.</p>';
+        return;
+      }
+
+      grid.innerHTML = signals.map(s => {
+        const sntClass = s.sentiment === 'bullish' ? 'b-bull'
+                       : s.sentiment === 'bearish' ? 'b-bear' : 'b-neut';
+        const sntLabel = s.sentiment.toUpperCase();
+        const trust    = (s.trust_score || 0);
+        const trustPct = Math.round(trust * 100);
+        const barClass = trust >= 0.7 ? 'bar-green' : trust >= 0.5 ? 'bar-yellow' : 'bar-red';
+        const srcShort = (s.source || '').replace('_', ' ').toUpperCase();
+
+        return `
+          <div class="signal-card card rounded p-3 cursor-default">
+            <div class="flex items-start justify-between gap-3">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1 flex-wrap">
+                  <span class="badge b-src">${srcShort}</span>
+                  <span class="badge ${sntClass}">${sntLabel}</span>
+                </div>
+                <a href="${s.url}" target="_blank"
+                   class="text-xs font-bold hover:underline block mb-1 truncate"
+                   style="color:var(--bright)">${s.title}</a>
+                <p class="text-xs" style="color:var(--muted);line-height:1.5">${s.signal}</p>
+              </div>
+              <div class="text-right shrink-0 w-16">
+                <div class="text-xs font-bold" style="color:var(--bright)">${trustPct}%</div>
+                <div class="text-xs" style="color:var(--muted)">trust</div>
+                <div class="bar-bg mt-1">
+                  <div class="bar-fill ${barClass}" style="width:${trustPct}%"></div>
+                </div>
+              </div>
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    // ── Render result ─────────────────────────────────────────────────────────
+    async function renderResult(completionEvent, runId) {
+      // Fetch full result from DB
+      try {
+        const res  = await fetch(`${API}/api/runs/${runId}`);
+        const data = await res.json();
+        const r    = data.result;
+        if (!r) return;
+
+        const posEl = document.getElementById('res-position');
+        const posClass = r.position === 'YES'   ? 'pos-yes'
+                       : r.position === 'NO'    ? 'pos-no' : 'pos-abstain';
+        posEl.textContent = r.position || '—';
+        posEl.className   = `text-3xl font-bold mb-1 ${posClass}`;
+
+        const confPct = Math.round((r.confidence || 0) * 100);
+        const edgePct = ((r.edge || 0) * 100).toFixed(1);
+        document.getElementById('res-confidence').textContent = `${confPct}%`;
+        document.getElementById('res-edge').textContent =
+          `edge ${r.edge >= 0 ? '+' : ''}${edgePct}%`;
+        document.getElementById('res-edge').style.color =
+          r.edge >= 0.05 ? 'var(--green)' : r.edge <= -0.05 ? 'var(--red)' : 'var(--yellow)';
+        document.getElementById('conf-bar').style.width  = `${confPct}%`;
+        document.getElementById('res-bull').textContent   = r.bull    || '—';
+        document.getElementById('res-bear').textContent   = r.bear    || '—';
+        document.getElementById('res-verdict').textContent= r.verdict || '—';
+        document.getElementById('res-reasoning').textContent = r.reasoning || '';
+
+        // Also render parsed signals from DB if not already shown
+        if (data.parsed_signals && data.parsed_signals.length) {
+          const mapped = data.parsed_signals.map(s => ({
+            source:      s.source,
+            url:         s.url,
+            title:       s.title,
+            sentiment:   s.sentiment,
+            trust_score: s.trust_score,
+            signal:      s.signal_text,
+          }));
+          renderSignals(mapped);
+        }
+
+        document.getElementById('result-card').style.display = 'block';
+      } catch (e) {
+        addLog(`Could not load result: ${e.message}`, 'red');
+      }
+    }
+
+    // ── Runs history ──────────────────────────────────────────────────────────
+    async function loadRuns() {
+      try {
+        const res  = await fetch(`${API}/api/runs`);
+        const runs = await res.json();
+        const el   = document.getElementById('runs-list');
+        if (!runs.length) { el.innerHTML = '<p>No runs yet.</p>'; return; }
+        el.innerHTML = runs.slice(0,8).map(r => {
+          const ts   = r.created_at ? r.created_at.slice(0,16).replace('T',' ') : '';
+          const col  = r.status === 'complete' ? 'var(--green)'
+                     : r.status === 'error'    ? 'var(--red)' : 'var(--yellow)';
+          return `<div class="cursor-pointer hover:opacity-80 py-1 border-b"
+                       style="border-color:var(--border)"
+                       onclick="loadRunDetail('${r.id}')">
+            <span style="color:${col}">●</span>
+            <span class="ml-1">${r.topic.slice(0,38)}…</span>
+            <span class="block ml-3" style="color:var(--muted)">${ts}</span>
+          </div>`;
+        }).join('');
+      } catch (e) { /* server not up yet */ }
+    }
+
+    async function loadRunDetail(runId) {
+      try {
+        const res  = await fetch(`${API}/api/runs/${runId}`);
+        const data = await res.json();
+        if (data.result) {
+          renderResult({}, runId);
+          document.getElementById('topic-input').value = data.run.topic;
+        }
+        if (data.parsed_signals && data.parsed_signals.length) {
+          renderSignals(data.parsed_signals.map(s => ({
+            source: s.source, url: s.url, title: s.title,
+            sentiment: s.sentiment, trust_score: s.trust_score, signal: s.signal_text,
+          })));
+        }
+      } catch (e) { addLog(`Load error: ${e.message}`, 'red'); }
+    }
+
+    // ── Log helpers ───────────────────────────────────────────────────────────
+    function addLog(msg, color) {
+      const el   = document.getElementById('log-panel');
+      const line = document.createElement('p');
+      const ts   = new Date().toLocaleTimeString('en', { hour12: false });
+      line.innerHTML = `<span style="color:var(--muted)">${ts}</span>  ${msg}`;
+      if (color === 'green') line.style.color = 'var(--green)';
+      if (color === 'red')   line.style.color = 'var(--red)';
+      el.appendChild(line);
+      el.scrollTop = el.scrollHeight;
+    }
+    function clearLog() {
+      document.getElementById('log-panel').innerHTML = '';
+    }
+    function resetBtn(success) {
+      const btn = document.getElementById('run-btn');
+      btn.disabled  = false;
+      btn.textContent = '▶ RUN ANALYSIS';
+      if (!success) document.getElementById('status-dot').style.background = 'var(--green)';
+    }
+  </script>
+</body>
+</html>
