@@ -20,6 +20,7 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+from pathlib import Path
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 from langgraph.graph import END, StateGraph
@@ -28,7 +29,7 @@ from src.llm_router import invoke_with_fallback
 from src.models import SignalState, empty_state
 from src.trust_score import attach_trust_scores
 
-load_dotenv()
+load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env")
 
 _DIVIDER = "─" * 62
 

@@ -14,9 +14,16 @@ Run with:
 
 from __future__ import annotations
 
+# ── Load .env FIRST — before any LangChain/LangGraph import ──────────────────
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+# Use explicit path so it works regardless of working directory
+_ENV_PATH = Path(__file__).parent.parent / ".env"
+load_dotenv(dotenv_path=_ENV_PATH)
+
 import asyncio
 import json
-import os
 import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -27,7 +34,6 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,9 +41,8 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 import storage.db as db
+from storage.vector_store import collection_size, index_signals, semantic_search
 from api.sse_bus import SENTINEL, close_sync, emit_sync, register_loop, subscribe, unsubscribe
-
-load_dotenv()
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -86,6 +91,50 @@ async def get_run(run_id: str):
         "parsed_signals": db.get_parsed_signals(run_id),
         "result":         db.get_result(run_id),
     }
+
+
+# ── Semantic search ────────────────────────────────────────────────────────────
+
+@app.get("/api/search")
+async def search_signals(q: str = "", n: int = 8, min_trust: float = 0.0):
+    """
+    Semantic search over all indexed signals.
+    Returns signals ranked by cosine similarity to `q`, then by trust score.
+    """
+    if not q.strip():
+        raise HTTPException(400, "q (query) is required")
+    results = semantic_search(q.strip(), n_results=n, min_trust=min_trust)
+    return {
+        "query":   q,
+        "count":   len(results),
+        "indexed": collection_size(),
+        "results": results,
+    }
+
+
+@app.get("/api/search/stats")
+async def search_stats():
+    return {"indexed_signals": collection_size()}
+
+
+@app.post("/api/index/refresh")
+async def refresh_index():
+    """
+    Trigger a full RSS + Twitter feed scrape and index into ChromaDB.
+    Runs in a background thread so the request returns immediately.
+    """
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(_executor, _run_feed_index_bg)
+    return {"status": "indexing", "message": "Feed index refresh started in background"}
+
+
+def _run_feed_index_bg() -> None:
+    """Background task: scrape all feeds and index into ChromaDB."""
+    try:
+        from scrapers.feed_indexer import run_full_index
+        run_full_index()
+    except Exception as exc:
+        print(f"  [INDEX] Feed indexer error: {exc}")
 
 
 # ── Start pipeline ─────────────────────────────────────────────────────────────
@@ -156,10 +205,14 @@ def _run_pipeline_bg(run_id: str, topic: str) -> None:
 
         # Persist results
         now = _utcnow()
+        parsed = final_state.get("parsed_signals", [])
         db.insert_raw_signals(run_id, final_state.get("raw_signals", []), now)
-        db.insert_parsed_signals(run_id, final_state.get("parsed_signals", []))
+        db.insert_parsed_signals(run_id, parsed)
         db.insert_result(run_id, final_state, now)
         db.finish_run(run_id, "complete", now)
+
+        # Index parsed signals into ChromaDB for semantic search
+        index_signals(run_id, parsed, run_topic=topic)
 
         emit_sync(run_id, {
             "type":       "complete",

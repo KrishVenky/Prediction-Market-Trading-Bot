@@ -181,6 +181,41 @@
 
       </div>
     </div>
+
+    <!-- ── Semantic Search ─────────────────────────────────────────────── -->
+    <div class="card rounded-lg p-5">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-xs font-bold" style="color:var(--muted)">SEMANTIC SIGNAL SEARCH  ·  CHROMADB</h2>
+          <p class="text-xs mt-1" style="color:var(--muted)">Ask any market question — finds the most similar news by meaning across all indexed feeds, ranked by trust</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <span id="index-count" class="text-xs px-2 py-1 rounded" style="background:var(--border);color:var(--blue)">0 indexed</span>
+          <button id="refresh-btn" onclick="refreshIndex()"
+            class="text-xs px-3 py-1 rounded font-bold transition-all"
+            style="background:var(--border);color:var(--text);border:1px solid var(--muted)">
+            ↻ REFRESH FEEDS
+          </button>
+        </div>
+      </div>
+      <div class="flex gap-3 mb-4">
+        <input id="search-input" type="text"
+          placeholder="Will AI regulation pass in the EU this year?"
+          class="flex-1 rounded px-4 py-2 text-sm focus:outline-none"
+          style="background:#0f1117;border:1px solid var(--border);color:var(--bright)"
+          onkeydown="if(event.key==='Enter') doSearch()"
+        />
+        <button onclick="doSearch()"
+          class="px-5 py-2 rounded text-sm font-bold transition-all"
+          style="background:var(--purple);color:#fff">
+          ⌕ SEARCH
+        </button>
+      </div>
+      <div id="search-results" class="space-y-3">
+        <p class="text-xs" style="color:var(--muted)">Run a pipeline first to build the vector index, then search across all past signals.</p>
+      </div>
+    </div>
+
   </main>
 
   <script>
@@ -202,13 +237,6 @@
 
     let currentRunId = null;
     let currentSSE   = null;
-
-    // ── Boot ────────────────────────────────────────────────────────────────
-    document.addEventListener('DOMContentLoaded', () => {
-      renderPipelineSteps();
-      renderQuickTopics();
-      loadRuns();
-    });
 
     // ── Quick topics ────────────────────────────────────────────────────────
     function renderQuickTopics() {
@@ -327,6 +355,7 @@
         resetBtn(true);
         document.getElementById('status-dot').style.background = 'var(--green)';
         loadRuns();
+        loadIndexCount();
         es.close();
       });
 
@@ -491,6 +520,119 @@
       btn.textContent = '▶ RUN ANALYSIS';
       if (!success) document.getElementById('status-dot').style.background = 'var(--green)';
     }
+
+    // ── Semantic search ───────────────────────────────────────────────────────
+    async function loadIndexCount() {
+      try {
+        const res  = await fetch(`${API}/api/search/stats`);
+        const data = await res.json();
+        document.getElementById('index-count').textContent =
+          `${data.indexed_signals} indexed`;
+      } catch (e) { /* server not ready */ }
+    }
+
+    async function refreshIndex() {
+      const btn = document.getElementById('refresh-btn');
+      btn.textContent = '⟳ INDEXING…';
+      btn.disabled = true;
+      btn.style.color = 'var(--yellow)';
+
+      try {
+        await fetch(`${API}/api/index/refresh`, { method: 'POST' });
+        // Poll for count increase — refresh runs in background (~10-20s)
+        let polls = 0;
+        const poll = setInterval(async () => {
+          await loadIndexCount();
+          polls++;
+          if (polls >= 12) {   // stop after 60s
+            clearInterval(poll);
+            btn.textContent = '↻ REFRESH FEEDS';
+            btn.disabled = false;
+            btn.style.color = 'var(--text)';
+          }
+        }, 5000);
+      } catch (e) {
+        btn.textContent = '↻ REFRESH FEEDS';
+        btn.disabled = false;
+        btn.style.color = 'var(--text)';
+      }
+    }
+
+    async function doSearch() {
+      const q   = document.getElementById('search-input').value.trim();
+      if (!q) return;
+      const el  = document.getElementById('search-results');
+      el.innerHTML = '<p class="text-xs pulse" style="color:var(--muted)">Searching vector DB…</p>';
+
+      try {
+        const res  = await fetch(`${API}/api/search?q=${encodeURIComponent(q)}&n=8`);
+        const data = await res.json();
+
+        // Update index count
+        document.getElementById('index-count').textContent =
+          `${data.indexed} indexed`;
+
+        if (!data.results || !data.results.length) {
+          el.innerHTML = '<p class="text-xs" style="color:var(--muted)">No matching signals found. Run more pipelines to build the index.</p>';
+          return;
+        }
+
+        el.innerHTML = `
+          <div class="text-xs mb-3" style="color:var(--muted)">
+            Found <span style="color:var(--bright)">${data.count}</span> signals matching
+            <span style="color:var(--purple)">"${q}"</span>
+          </div>
+          ${data.results.map(s => {
+            const sntClass = s.sentiment === 'bullish' ? 'b-bull'
+                           : s.sentiment === 'bearish' ? 'b-bear' : 'b-neut';
+            const trust    = parseFloat(s.trust_score || 0);
+            const trustPct = Math.round(trust * 100);
+            const barClass = trust >= 0.7 ? 'bar-green' : trust >= 0.5 ? 'bar-yellow' : 'bar-red';
+            const simPct   = Math.round((s.similarity || 0) * 100);
+            const srcShort = (s.source || '').replace(/_/g,' ').toUpperCase();
+            const topic    = s.run_topic ? s.run_topic.slice(0,70) : '';
+            return `
+              <div class="signal-card card rounded p-3">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-1 flex-wrap">
+                      <span class="badge b-src">${srcShort}</span>
+                      <span class="badge ${sntClass}">${s.sentiment.toUpperCase()}</span>
+                      ${topic ? `<span class="text-xs" style="color:var(--muted)">⤷ ${topic}</span>` : ''}
+                    </div>
+                    <a href="${s.url || '#'}" target="_blank"
+                       class="text-xs font-bold hover:underline block mb-1"
+                       style="color:var(--bright)">${s.title || '—'}</a>
+                    <p class="text-xs" style="color:var(--muted);line-height:1.5">${s.signal_text || '—'}</p>
+                  </div>
+                  <div class="text-right shrink-0 w-20 space-y-2">
+                    <div>
+                      <div class="text-xs font-bold" style="color:${simPct>=50?'var(--green)':simPct>=30?'var(--yellow)':'var(--red)'}">${simPct}%</div>
+                      <div class="text-xs" style="color:var(--muted)">match</div>
+                    </div>
+                    <div>
+                      <div class="text-xs font-bold" style="color:var(--bright)">${trustPct}%</div>
+                      <div class="text-xs" style="color:var(--muted)">trust</div>
+                      <div class="bar-bg mt-1">
+                        <div class="bar-fill ${barClass}" style="width:${trustPct}%"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>`;
+          }).join('')}`;
+      } catch (e) {
+        el.innerHTML = `<p class="text-xs" style="color:var(--red)">Search error: ${e.message}</p>`;
+      }
+    }
+
+    // Update index count on boot and after each run completes
+    document.addEventListener('DOMContentLoaded', () => {
+      renderPipelineSteps();
+      renderQuickTopics();
+      loadRuns();
+      loadIndexCount();
+    });
   </script>
 </body>
 </html>

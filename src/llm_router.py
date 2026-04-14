@@ -16,10 +16,11 @@ from __future__ import annotations
 import os
 import time
 
+from pathlib import Path
 from dotenv import load_dotenv
 from langchain_core.messages import BaseMessage
 
-load_dotenv()
+load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 
 
 # ── Individual LLM builders ────────────────────────────────────────────────────

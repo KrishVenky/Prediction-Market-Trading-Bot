@@ -11,17 +11,21 @@ Usage:
 
 from __future__ import annotations
 
-import sys
+# ── Load .env FIRST — before any LangChain/LangGraph import ──────────────────
+# LangSmith tracer reads LANGCHAIN_* env vars at first import time.
+# If load_dotenv() runs after those imports, tracing silently does nothing.
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+# Use explicit path so it works regardless of working directory
+load_dotenv(dotenv_path=Path(__file__).parent / ".env")
+
+import sys
 
 # Ensure project root is importable from any working directory
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
-
-from dotenv import load_dotenv
-
-load_dotenv()
 
 # ── Demo topics (for interactive picker) ──────────────────────────────────────
 
