@@ -30,14 +30,14 @@ load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env")
 def _pick_llm():
     """
     Return a crewai.LLM pointed at whichever backend is available.
-    Tries Ollama first; falls back to Gemini Flash.
+    Priority: Ollama (local) → Groq (free, fast) → Gemini Flash
     """
     from crewai import LLM
 
     ollama_url   = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     ollama_model = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
 
-    # Quick reachability check — non-blocking 2 s timeout
+    # 1. Try Ollama (local, zero cost)
     try:
         import requests as _req
         r = _req.get(f"{ollama_url}/api/tags", timeout=2)
@@ -48,24 +48,29 @@ def _pick_llm():
                 print(f"  [DEBATE] Using Ollama ({ollama_model})")
                 return LLM(model=f"ollama/{ollama_model}", base_url=ollama_url)
             else:
-                print(f"  [DEBATE] Ollama running but {ollama_model} not pulled — falling back")
+                print(f"  [DEBATE] Ollama running but {ollama_model} not pulled — trying Groq")
         else:
-            print("  [DEBATE] Ollama not reachable — falling back to Gemini Flash")
+            print("  [DEBATE] Ollama not reachable — trying Groq")
     except Exception:
-        print("  [DEBATE] Ollama not reachable — falling back to Gemini Flash")
+        print("  [DEBATE] Ollama not reachable — trying Groq")
 
-    # Gemini Flash fallback via LiteLLM routing
+    # 2. Groq — free tier, massive RPM, confirmed working
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    groq_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    if groq_key:
+        print(f"  [DEBATE] Using Groq ({groq_model})")
+        return LLM(model=f"groq/{groq_model}", api_key=groq_key)
+
+    # 3. Gemini fallback
     api_key = os.getenv("GOOGLE_API_KEY", "")
-    if not api_key:
-        raise EnvironmentError(
-            "Neither Ollama (qwen2.5:14b) nor GOOGLE_API_KEY is available.\n"
-            "Set GOOGLE_API_KEY in your .env or start Ollama."
-        )
-    # Try Gemini models in order
-    for gemini_model in ["gemini/gemini-2.0-flash", "gemini/gemini-2.0-flash-lite"]:
-        print(f"  [DEBATE] Trying {gemini_model}")
-        return LLM(model=gemini_model, api_key=api_key)
-    return LLM(model="gemini/gemini-2.0-flash", api_key=api_key)
+    if api_key:
+        for gemini_model in ["gemini/gemini-2.5-flash", "gemini/gemini-2.0-flash-lite", "gemini/gemini-2.0-flash"]:
+            print(f"  [DEBATE] Trying {gemini_model}")
+            return LLM(model=gemini_model, api_key=api_key)
+
+    raise EnvironmentError(
+        "No LLM available. Set GROQ_API_KEY or GOOGLE_API_KEY in .env, or start Ollama."
+    )
 
 
 # ── Agent / Task builders ──────────────────────────────────────────────────────
