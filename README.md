@@ -1,248 +1,209 @@
-# PolySignal — Prediction Market Intelligence System
+# PolySignal: Prediction Market Trading Intelligence Bot
 
-> **LLMA Course Project** | LangGraph · LangChain · CrewAI · Multimodal LLMs  
-> Geographic information-arbitrage on prediction markets via multi-agent signal processing.
+PolySignal ingests live news signals, debates market direction with multi-agent reasoning, and outputs a confidence score plus edge for a prediction-market question.
 
----
+Pipeline flow:
 
-## The Problem
+1. Fetch RSS headlines relevant to the question (22 feeds, topic-aware priority).
+2. Parse and rank the most useful signals with Gemini Flash (fallback to Ollama).
+3. Run a Bull vs Bear vs Arbiter debate using CrewAI.
+4. Score confidence and edge for a final intelligence report.
+5. Index all signals into ChromaDB for semantic search across past runs.
 
-Most Polymarket traders are American. High-signal global events — RBI rate decisions, parliamentary sessions, OSINT conflict updates — resolve during US sleep hours. By the time American traders wake up and price in new information, the edge is gone.
+## Features
 
-**This system closes that gap:** monitor primary sources in real-time, run multi-agent analysis, and surface actionable edges before the market catches up.
+- FastAPI backend with live SSE pipeline updates
+- Single-page frontend dashboard (`frontend/index.html`)
+- CLI mode for quick topic analysis
+- SQLite persistence for run history, signals, and final reports
+- ChromaDB semantic search — ask any question, finds similar past signals by meaning
+- Bulk feed indexer — scrapes 22 RSS feeds in parallel, indexes everything into ChromaDB
+- LLM fallback routing (Gemini -> Ollama) for resilience
+- Pytest suite with mocked LLM/scraper behavior (51 tests)
 
----
+## Tech Stack
 
-## What We Built (For This Class)
+- Python 3.10+
+- FastAPI + Uvicorn + SSE
+- LangGraph + LangChain + LangSmith tracing
+- CrewAI
+- Gemini 1.5 Flash and/or local Ollama (`qwen2.5:14b`)
+- ChromaDB (local persistent vector store)
+- SQLite
 
-A **LangGraph-orchestrated multi-agent pipeline** that:
+## Project Structure
 
-1. Ingests signals from RSS feeds and Reddit (Twitter/Discord as extensions)
-2. Processes multimodal content (images, charts, maps) via vision LLMs
-3. Routes signals through a **5-agent debate architecture** (Bull / Bear / BaseRate / Market / Arbiter)
-4. Scores confidence using a weighted evidence model
-5. Calculates Kelly-optimal position sizes and surfaces alerts
-
-### LLM Stack
-
-| Component | Framework | Model |
-|-----------|-----------|-------|
-| Agent orchestration | LangGraph | Claude Sonnet 4.6 |
-| Multi-agent debate | CrewAI | Claude Sonnet 4.6 |
-| Vision processing | LangChain | GPT-4o / Gemini |
-| Structured extraction | LangChain | Gemini Flash |
-
-### Token Efficiency: TOML Inter-Agent Messages
-
-Agents communicate via **TOML** rather than JSON. This is a deliberate design choice:
-
-```toml
-# JSON equivalent would be 23% more tokens due to quoted keys + brackets
-[signal]
-source = "rbi_rss"
-tier = 0
-confidence = 0.91
-timestamp = "2026-04-13T10:05:00+05:30"
-
-[event]
-type = "rate_decision"
-direction = "cut"
-basis_points = 25
-confirmed = true
-
-[market]
-id = "rbi-rate-cut-april-2026"
-current_price = 0.42
-our_forecast = 0.91
-edge = 0.49
+```text
+.
+|-- main.py                             # CLI entrypoint
+|-- api/server.py                       # FastAPI app + SSE streaming
+|-- src/pipeline/langgraph_pipeline.py  # LangGraph 4-node pipeline
+|-- src/agents/debate_crew.py           # CrewAI Bull/Bear/Arbiter agents
+|-- src/forecasting/confidence_scorer.py
+|-- scrapers/rss_scraper.py             # feedparser RSS (22 feeds)
+|-- scrapers/feed_indexer.py            # bulk feed scraper -> ChromaDB
+|-- storage/db.py                       # SQLite schema + data access
+|-- storage/vector_store.py             # ChromaDB semantic search
+|-- frontend/index.html                 # Dashboard + search UI
+|-- tests/                              # Unit tests (51)
+`-- .env.example
 ```
 
-TOML keys are unquoted, inline tables are compact, and multi-line arrays are clean — saving ~18-25% tokens on structured inter-agent payloads at scale.
+## Setup
 
----
+### 1. Create and activate virtual environment
 
-## Architecture
+macOS/Linux:
 
-```
-┌──────────────────────────────────────────────────────────┐
-│                    INGESTION LAYER                        │
-│   RSS (feedparser)  ·  Reddit (PRAW)  ·  [Twitter/Discord]│
-└──────────────────────────┬───────────────────────────────┘
-                           │ raw signals (TOML)
-                           ▼
-┌──────────────────────────────────────────────────────────┐
-│              LANGGRAPH STATE MACHINE                      │
-│                                                          │
-│  ingest → vision_processor → normalizer → llm_parser     │
-│       → correlator → confidence_scorer → edge_calculator │
-└──────────────────────────┬───────────────────────────────┘
-                           │ parsed + scored signal
-                           ▼
-┌──────────────────────────────────────────────────────────┐
-│             CREWAI MULTI-AGENT DEBATE                     │
-│                                                          │
-│   BullAgent ──┐                                          │
-│   BearAgent ──┼──► ArbiterAgent ──► final_probability    │
-│   BaseRateAgent┘                                         │
-│   MarketAgent ─┘                                         │
-└──────────────────────────┬───────────────────────────────┘
-                           │ position recommendation
-                           ▼
-┌──────────────────────────────────────────────────────────┐
-│           RISK MANAGEMENT + ALERT LAYER                   │
-│   Kelly Criterion sizing · Portfolio limits · Telegram    │
-└──────────────────────────────────────────────────────────┘
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 ```
 
----
+Windows:
 
-## LangGraph Pipeline
-
-The core pipeline is a typed state machine. Each node is a pure function over `SignalState`:
-
-```python
-class SignalState(TypedDict):
-    raw_signals:          List[dict]   # {source, content, media_urls, timestamp, tier}
-    vision_descriptions:  List[str]    # LLM descriptions of images/maps
-    normalized_text:      List[str]    # cleaned, deduped signal text
-    parsed_event:         str          # TOML string — structured extraction
-    agent_verdicts:       dict         # {bull, bear, base_rate, market} → probability
-    confidence_score:     float        # 0–100
-    edge:                 float        # forecast_prob - market_price
-    position_size:        float        # Kelly-adjusted USD
-    alert_ready:          bool
+```bash
+python -m venv .venv
+.venv\Scripts\activate
 ```
 
-**Graph topology:**
-
-```
-ingest
-  └─► vision_processor      (parallel: image URLs → text desc via GPT-4o)
-        └─► normalizer       (deduplicate, clean, merge text + vision)
-              └─► llm_parser (structured TOML extraction via Gemini Flash)
-                    └─► correlator        (cross-source agreement check)
-                          └─► crewai_debate  (5-agent probability vote)
-                                └─► confidence_scorer
-                                      └─► edge_calculator
-                                            └─► alert_node
-                                                  └─► END
-```
-
-Conditional edges skip `crewai_debate` if correlator finds < 2 agreeing sources, saving ~2,400 tokens per low-signal event.
-
----
-
-## CrewAI Multi-Agent Debate
-
-Five agents are instantiated per high-confidence signal. They receive the same TOML-encoded event and return a probability + rationale:
-
-| Agent | Bias | Primary Tool |
-|-------|------|-------------|
-| `BullAgent` | Confirms YES | evidence strength scorer |
-| `BearAgent` | Argues NO | counter-signal searcher |
-| `BaseRateAgent` | Historical frequencies | base rate lookup |
-| `MarketAgent` | Price-implied probability | Polymarket API |
-| `ArbiterAgent` | Synthesizes all 4 | weighted ensemble |
-
-**ArbiterAgent prompt pattern:**
-```
-You receive four probability estimates [TOML format].
-Your job: synthesize into a single calibrated probability.
-Weight: bull=0.25, bear=0.25, base_rate=0.30, market=0.20
-Penalize extreme outliers (>0.3 deviation from median).
-Return only: probability (float) + 1-sentence rationale.
-```
-
-This keeps Arbiter output < 80 tokens while maintaining calibration accountability.
-
----
-
-## Confidence Scoring
-
-```
-confidence = (
-    0.40 × tier0_present        +   # primary source (RBI, Fed, etc.)
-    0.25 × cross_source_count   +   # ≥3 sources agree → full weight
-    0.20 × vision_confirmed     +   # image/chart corroborates text
-    0.15 × base_rate_match          # event type has historical precedent
-) × 100
-```
-
-Alerts fire only when `confidence ≥ 80` AND `edge ≥ 0.20`.
-
----
-
-## Position Sizing (Kelly Criterion)
-
-```python
-kelly_full  = (p * b - q) / b          # b = market odds
-kelly_adj   = kelly_full × confidence × 0.25   # quarter-Kelly × confidence
-position    = min(kelly_adj × bankroll, 0.05 × bankroll)   # hard 5% cap
-```
-
-Portfolio hard limits: max 5% per trade, 40% total deployed, 8 concurrent positions.
-
----
-
-## Running It
+### 2. Install dependencies
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env   # fill in API keys
-python src/main.py
 ```
 
-**Test individual nodes:**
+### 3. Configure environment variables
+
 ```bash
-python -m src.pipeline.rss_scraper
-python -m src.pipeline.langgraph_pipeline
-python -m src.agents.debate_crew
+cp .env.example .env
 ```
 
----
+Minimum required:
 
-## Repo Layout
+- `GOOGLE_API_KEY` (Gemini Flash)
 
-```
-src/
-  pipeline/
-    rss_scraper.py          # feedparser + async polling
-    reddit_scraper.py       # PRAW wrapper
-    vision_processor.py     # GPT-4o image → text
-    langgraph_pipeline.py   # main StateGraph definition
-  agents/
-    debate_crew.py          # CrewAI 5-agent setup
-    bull_agent.py
-    bear_agent.py
-    base_rate_agent.py
-    market_agent.py
-    arbiter_agent.py
-  forecasting/
-    confidence_scorer.py
-    edge_calculator.py
-    kelly_sizing.py
-  utils/
-    toml_schema.py          # TOML ↔ dict helpers for inter-agent messages
-    signal_dedup.py
-config/
-  sources.toml              # RSS/Reddit source definitions + tiers
-  risk.toml                 # portfolio limits + Kelly params
-data/
-  polymarket.db             # SQLite: signals, verdicts, outcomes
+Optional but recommended:
+
+- `LANGCHAIN_TRACING_V2=true`
+- `LANGCHAIN_API_KEY`
+- `LANGCHAIN_PROJECT=PolySignal`
+- `OLLAMA_BASE_URL=http://localhost:11434`
+- `OLLAMA_MODEL=qwen2.5:14b`
+
+If you want local LLM fallback/debate via Ollama:
+
+```bash
+ollama pull qwen2.5:14b
+ollama serve
 ```
 
----
+### 4. Bootstrap the ChromaDB index (recommended before first run)
 
-## Key Design Decisions
+```bash
+python -X utf8 scrapers/feed_indexer.py
+```
 
-**Why LangGraph over a simple chain?**  
-Stateful graph lets us short-circuit low-signal events (skip debate, save ~$0.003/call) and retry individual nodes without re-running the full pipeline.
+This scrapes all 22 feeds and indexes ~300 articles into ChromaDB so semantic search works immediately.
 
-**Why CrewAI for the debate layer?**  
-CrewAI's role-based agent definition maps directly to the Bull/Bear framing. Each agent gets scoped tools, preventing the Arbiter from seeing raw evidence before the debate completes (no anchoring bias).
+## Run the System
 
-**Why TOML between agents?**  
-Benchmark on 500 structured payloads: TOML averaged 312 tokens vs JSON's 401 tokens (22% reduction). At 1,000 signals/day this compounds to real cost savings.
+### Option A: CLI run
 
-**Why quarter-Kelly?**  
-Full Kelly is theoretically optimal but requires perfect probability calibration. At Brier score 0.18 we're good but not perfect — 0.25× Kelly limits ruin risk to acceptable levels during miscalibration events.
+```bash
+python main.py
+```
+
+Or pass a question directly:
+
+```bash
+python main.py "Will Bitcoin exceed $100,000 before end of 2026?"
+```
+
+### Option B: Web app (recommended)
+
+```bash
+python -m uvicorn api.server:app --reload --port 8000
+```
+
+Open `http://localhost:8000`. The dashboard shows:
+
+- Live node-by-node pipeline progress
+- Parsed signals with trust scores and source badges
+- Final position (`YES` / `NO` / `ABSTAIN`), confidence %, and edge %
+- Semantic search panel — query any question to find similar past signals
+
+## Semantic Search
+
+After running one or more pipelines, use the search panel at the bottom of the dashboard to find related signals. The LLM-style search works by embedding your question and finding the most semantically similar articles in ChromaDB, ranked by cosine similarity then trust score.
+
+You can also refresh the index manually via the **REFRESH FEEDS** button, or hit:
+
+```bash
+curl -X POST http://localhost:8000/api/index/refresh
+```
+
+## Run Tests
+
+```bash
+pytest -q
+```
+
+## Data Persistence
+
+- `polysignal.db` — SQLite (runs, raw signals, parsed signals, results)
+- `chromadb_store/` — ChromaDB vector embeddings (persisted locally)
+
+## API Summary
+
+Detailed API docs: see `API.md`.
+
+Main endpoints:
+
+- `GET /` — dashboard
+- `GET /api/runs` — run history
+- `GET /api/runs/{run_id}` — full run detail
+- `POST /api/run` — start pipeline
+- `GET /api/run/{run_id}/stream` — SSE live events
+- `GET /api/search?q=<question>` — semantic signal search
+- `POST /api/index/refresh` — trigger feed re-scrape
+
+## Additional Docs
+
+- `RUNBOOK.md` — practical run and troubleshooting guide
+- `API.md` — endpoint payloads and SSE event contract
+- `PROJECT_GAP_ANALYSIS.md` — what is missing, what is relevant, and roadmap priorities
+
+## Docker
+
+Build image:
+
+```bash
+docker build -t polysignal:latest .
+```
+
+Run container:
+
+```bash
+docker run --rm -p 8000:8000 --env-file .env polysignal:latest
+```
+
+Open `http://localhost:8000`.
+
+Optional persistent DB mount:
+
+```bash
+docker run --rm -p 8000:8000 --env-file .env \
+  -v "$(pwd)/polysignal.db:/app/polysignal.db" \
+  -v "$(pwd)/chromadb_store:/app/chromadb_store" \
+  polysignal:latest
+```
+
+## Troubleshooting
+
+- **Missing Gemini key**: set `GOOGLE_API_KEY` in `.env`.
+- **Ollama errors**: ensure `ollama serve` is running and model is pulled.
+- **Frontend not loading**: confirm server is running on port 8000 and `frontend/index.html` exists.
+- **Empty signal list**: RSS feeds may be temporarily unavailable; retry the run.
+- **Search returns nothing**: run `python -X utf8 scrapers/feed_indexer.py` to bootstrap the index.
+- **LangSmith traces missing**: ensure `load_dotenv()` runs before any LangChain import — already handled in all entry points.
