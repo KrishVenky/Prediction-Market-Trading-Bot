@@ -305,9 +305,9 @@ def get_pipeline_stats() -> dict:
         total_parsed    = c.execute("SELECT COUNT(*) FROM parsed_signals").fetchone()[0]
         total_results   = c.execute("SELECT COUNT(*) FROM results").fetchone()[0]
         sources_by_count = c.execute("""
-            SELECT source, source_type, COUNT(*) as cnt,
+            SELECT source, 'rss' as source_type, COUNT(*) as cnt,
                    AVG(trust_score) as avg_trust
-            FROM raw_signals
+            FROM parsed_signals
             GROUP BY source
             ORDER BY cnt DESC
             LIMIT 20
