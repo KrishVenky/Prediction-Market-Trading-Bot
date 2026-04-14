@@ -5,17 +5,26 @@ lxml>=5.0.0
 feedparser>=6.0.11
 
 # Optional — only needed for twitter_scraper.py Playwright strategies
-playwright>=1.44.0
+# playwright>=1.44.0
 
 # ── LLM / AI Stack ────────────────────────────────────────────────────────────
 langchain>=0.2.0
 langchain-core>=0.2.0
 langchain-google-genai>=1.0.7
 langchain-community>=0.2.16
+langchain-groq>=0.1.0
 langgraph>=0.2.0
 
-# ── CrewAI ────────────────────────────────────────────────────────────────────
+# ── CrewAI (with LiteLLM for Groq/multi-provider routing) ────────────────────
 crewai>=0.63.0
+litellm>=1.0.0
+
+# ── Vector store ──────────────────────────────────────────────────────────────
+chromadb>=1.0.0
+
+# ── TOML message format ───────────────────────────────────────────────────────
+tomli-w>=1.0.0
+tomli>=2.0.0          # Python 3.10 backport of tomllib (3.11+ has it in stdlib)
 
 # ── Web server ────────────────────────────────────────────────────────────────
 fastapi>=0.111.0

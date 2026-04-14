@@ -4,6 +4,43 @@ Complete context for AI assistants working on this codebase.
 
 ---
 
+## DEMO QUICK-START (read this first)
+
+> **If you just did `git pull` and need to run this for a demo — do exactly this:**
+
+```bat
+# Windows — double-click or run in terminal:
+start.bat
+```
+
+That script handles everything: creates the venv, installs deps, runs tests, starts the server. Open **http://localhost:8000** when it says `Launching`.
+
+**If you're setting up on a new machine from scratch:**
+
+```bash
+git clone https://github.com/KrishVenky/Prediction-Market-Trading-Bot.git
+cd Prediction-Market-Trading-Bot
+copy .env.example .env        # then edit .env with your keys
+start.bat
+```
+
+**Minimum .env you need for the demo to work:**
+
+```ini
+GROQ_API_KEY=gsk_...          # get free at console.groq.com — most reliable
+GOOGLE_API_KEY=...            # from aistudio.google.com — optional, quota exhausts fast
+```
+
+Groq is the primary LLM at demo time — Gemini free-tier quota exhausts after ~5 runs. If you only have one key, make it Groq.
+
+**What to demo:**
+1. Open http://localhost:8000
+2. Type a question like `Will the Fed cut rates before July 2025?`
+3. Hit Analyse — watch all 4 nodes fire live (takes ~30–60s)
+4. Point at: the TOML inter-agent messages tab, the Data Pipeline Lineage panel, the Bull/Bear/Arbiter debate, and the final confidence score + edge
+
+---
+
 ## What This Is
 
 **PolySignal** is a prediction market intelligence pipeline. Given a market question (e.g. "Will the Fed cut rates before July 2025?"), it:
