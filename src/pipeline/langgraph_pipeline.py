@@ -28,18 +28,24 @@ from langgraph.graph import END, StateGraph
 from src.llm_router import invoke_with_fallback
 from src.models import SignalState, empty_state
 from src.trust_score import attach_trust_scores
+from src.message_format import (
+    build_fetch_message, build_parse_message,
+    build_debate_message, build_score_message,
+)
 
 load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env")
 
-_DIVIDER = "─" * 62
+_DIVIDER = "-" * 62
 
 # ── SSE event callback (set by api/server.py, None in CLI mode) ────────────────
 _event_callback: Optional[Callable] = None
+_current_run_id: str = "cli"
 
 
-def set_event_callback(cb: Optional[Callable]) -> None:
-    global _event_callback
+def set_event_callback(cb: Optional[Callable], run_id: str = "cli") -> None:
+    global _event_callback, _current_run_id
     _event_callback = cb
+    _current_run_id = run_id
 
 
 def _emit(event_type: str, **payload) -> None:
@@ -48,6 +54,15 @@ def _emit(event_type: str, **payload) -> None:
             _event_callback(event_type, payload)
         except Exception:
             pass
+
+
+def _store_agent_message(run_id: str, node: str, msg_type: str, toml: str) -> None:
+    """Persist TOML inter-agent message to DB (best-effort, never crashes pipeline)."""
+    try:
+        import storage.db as _db
+        _db.insert_agent_message(run_id, node, msg_type, toml)
+    except Exception:
+        pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -65,8 +80,11 @@ def node_fetch(state: SignalState) -> dict:
 
     signals = scrape_all(max_per_feed=4, topic=state["topic"], verbose=True)
 
+    toml_msg = build_fetch_message(_current_run_id, state["topic"], signals)
     _emit("node_done", node="fetch", count=len(signals),
-          sources=list({s.source for s in signals}))
+          sources=list({s.source for s in signals}),
+          toml=toml_msg)
+    _store_agent_message(_current_run_id, "fetch", "fetch_complete", toml_msg)
 
     return {"raw_signals": signals}
 
@@ -138,6 +156,8 @@ Return only 3 SIGNAL blocks separated by ---.
     for p in parsed:
         print(f"    [{p['source'].upper()}] {p['title'][:55]}  →  {p['sentiment'].upper()}  trust={p.get('trust_score',0):.2f}")
 
+    active_model = os.getenv("POLYSIGNAL_ACTIVE_MODEL", "gemini-2.0-flash")
+    toml_msg = build_parse_message(_current_run_id, topic, parsed, active_model)
     _emit("node_done", node="parse", count=len(parsed),
           signals=[{
               "source":      s["source"],
@@ -146,7 +166,9 @@ Return only 3 SIGNAL blocks separated by ---.
               "sentiment":   s["sentiment"],
               "trust_score": s.get("trust_score", 0),
               "signal":      s["signal"],
-          } for s in parsed])
+          } for s in parsed],
+          toml=toml_msg)
+    _store_agent_message(_current_run_id, "parse", "parse_complete", toml_msg)
 
     return {"parsed_signals": parsed}
 
@@ -240,9 +262,13 @@ def node_debate(state: SignalState) -> dict:
     print(f"\n  POSITION : {result['position']}")
     print(f"  VERDICT  : {result['verdict'][:160]}…")
 
+    active_model = os.getenv("POLYSIGNAL_ACTIVE_MODEL", "gemini-2.0-flash")
+    toml_msg = build_debate_message(_current_run_id, topic, result, active_model)
     _emit("node_done", node="debate",
           position=result["position"],
-          verdict=result["verdict"][:200])
+          verdict=result["verdict"][:200],
+          toml=toml_msg)
+    _store_agent_message(_current_run_id, "debate", "debate_complete", toml_msg)
 
     return {"debate_result": result}
 
@@ -303,12 +329,17 @@ def node_score(state: SignalState) -> dict:
     report += f"\n{banner}\n"
     print(report)
 
+    active_model = os.getenv("POLYSIGNAL_ACTIVE_MODEL", "gemini-2.0-flash")
+    score_payload = {**scores, "position": position}
+    toml_msg = build_score_message(_current_run_id, topic, score_payload, active_model)
     _emit("node_done", node="score",
           confidence=conf, edge=edge, market_price=mkt,
           position=position, reasoning=reasoning,
           bull=debate.get("bull", "")[:300],
           bear=debate.get("bear", "")[:300],
-          verdict=debate.get("verdict", "")[:300])
+          verdict=debate.get("verdict", "")[:300],
+          toml=toml_msg)
+    _store_agent_message(_current_run_id, "score", "score_complete", toml_msg)
 
     return {
         "confidence_score": conf,

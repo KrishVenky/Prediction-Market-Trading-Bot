@@ -117,6 +117,18 @@ async def search_stats():
     return {"indexed_signals": collection_size()}
 
 
+@app.get("/api/runs/{run_id}/messages")
+async def get_run_messages(run_id: str):
+    """Return all TOML inter-agent messages for a pipeline run."""
+    return db.get_agent_messages(run_id)
+
+
+@app.get("/api/stats")
+async def pipeline_stats():
+    """Aggregate stats: sources, signal counts, sentiment distribution."""
+    return db.get_pipeline_stats()
+
+
 @app.post("/api/index/refresh")
 async def refresh_index():
     """
@@ -198,7 +210,7 @@ def _run_pipeline_bg(run_id: str, topic: str) -> None:
     def on_event(event_type: str, payload: dict) -> None:
         emit_sync(run_id, {"type": event_type, **payload})
 
-    set_event_callback(on_event)
+    set_event_callback(on_event, run_id=run_id)
 
     try:
         final_state = run_pipeline(topic)

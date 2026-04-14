@@ -19,9 +19,10 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env")
 
 
 # ── LLM selector ──────────────────────────────────────────────────────────────
@@ -60,8 +61,11 @@ def _pick_llm():
             "Neither Ollama (qwen2.5:14b) nor GOOGLE_API_KEY is available.\n"
             "Set GOOGLE_API_KEY in your .env or start Ollama."
         )
-    print("  [DEBATE] Using Gemini Flash (gemini/gemini-1.5-flash)")
-    return LLM(model="gemini/gemini-1.5-flash", api_key=api_key)
+    # Try Gemini models in order
+    for gemini_model in ["gemini/gemini-2.0-flash", "gemini/gemini-2.0-flash-lite"]:
+        print(f"  [DEBATE] Trying {gemini_model}")
+        return LLM(model=gemini_model, api_key=api_key)
+    return LLM(model="gemini/gemini-2.0-flash", api_key=api_key)
 
 
 # ── Agent / Task builders ──────────────────────────────────────────────────────

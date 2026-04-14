@@ -69,10 +69,10 @@
         <span class="text-xs" style="color:var(--muted)">prediction market intelligence</span>
       </div>
       <div class="flex items-center gap-4 text-xs" style="color:var(--muted)">
+        <span id="hdr-model" style="color:var(--green)">Groq/llama-3.3-70b</span><span>·</span>
         <span>LangGraph</span><span>·</span>
-        <span>Gemini Flash</span><span>·</span>
         <span>CrewAI</span><span>·</span>
-        <span>qwen2.5:14b</span>
+        <span>ChromaDB</span>
       </div>
     </div>
   </header>
@@ -180,6 +180,31 @@
         </div>
 
       </div>
+    </div>
+
+    <!-- ── Data Pipeline Lineage ──────────────────────────────────────── -->
+    <div class="grid grid-cols-2 gap-6">
+
+      <!-- Sources breakdown -->
+      <div class="card rounded-lg p-4">
+        <h2 class="text-xs font-bold mb-3" style="color:var(--muted)">DATA SOURCES  ·  SIGNAL LINEAGE</h2>
+        <div id="source-stats" class="space-y-2 text-xs">
+          <p style="color:var(--muted)">Loading…</p>
+        </div>
+      </div>
+
+      <!-- TOML inter-agent message viewer -->
+      <div class="card rounded-lg p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-xs font-bold" style="color:var(--muted)">INTER-AGENT TOML MESSAGES</h2>
+          <div class="flex gap-1" id="toml-tabs"></div>
+        </div>
+        <pre id="toml-viewer"
+          class="text-xs rounded p-3 overflow-auto"
+          style="background:var(--bg);color:var(--green);max-height:240px;white-space:pre-wrap;font-size:0.65rem">
+Waiting for pipeline run…</pre>
+      </div>
+
     </div>
 
     <!-- ── Semantic Search ─────────────────────────────────────────────── -->
@@ -332,6 +357,9 @@
         const d = JSON.parse(e.data);
         setNodeState(d.node, 'done');
 
+        // Show TOML message in the viewer
+        if (d.toml) updateTomlViewer(d.node, d.toml);
+
         if (d.node === 'fetch') {
           addLog(`[FETCH] ${d.count} signals from ${(d.sources||[]).join(', ')}`);
         }
@@ -356,6 +384,7 @@
         document.getElementById('status-dot').style.background = 'var(--green)';
         loadRuns();
         loadIndexCount();
+        loadSourceStats();
         es.close();
       });
 
@@ -626,12 +655,92 @@
       }
     }
 
+    // ── Source stats panel ────────────────────────────────────────────────────
+    async function loadSourceStats() {
+      try {
+        const res  = await fetch(`${API}/api/stats`);
+        const data = await res.json();
+        const el   = document.getElementById('source-stats');
+
+        const totals = `
+          <div class="grid grid-cols-3 gap-3 mb-3 pb-3" style="border-bottom:1px solid var(--border)">
+            <div class="text-center">
+              <div class="text-lg font-bold" style="color:var(--bright)">${data.total_raw || 0}</div>
+              <div style="color:var(--muted)">raw signals</div>
+            </div>
+            <div class="text-center">
+              <div class="text-lg font-bold" style="color:var(--green)">${data.total_parsed || 0}</div>
+              <div style="color:var(--muted)">parsed</div>
+            </div>
+            <div class="text-center">
+              <div class="text-lg font-bold" style="color:var(--blue)">${data.complete_runs || 0}/${data.total_runs || 0}</div>
+              <div style="color:var(--muted)">runs done</div>
+            </div>
+          </div>`;
+
+        const sources = (data.sources || []).slice(0, 10).map(s => {
+          const pct = Math.min(100, Math.round((s.cnt / Math.max(...(data.sources||[{cnt:1}]).map(x=>x.cnt))) * 100));
+          const trust = Math.round((s.avg_trust || 0.55) * 100);
+          const typeColor = s.source_type === 'twitter' ? 'var(--purple)' : 'var(--blue)';
+          return `
+            <div class="flex items-center gap-2 py-1">
+              <span class="shrink-0 w-3 h-3 rounded-full" style="background:${typeColor}"></span>
+              <span class="flex-1 truncate" style="color:var(--text)">${s.source}</span>
+              <span style="color:var(--muted)">${s.cnt}</span>
+              <div class="w-20 bar-bg">
+                <div class="bar-fill bar-green" style="width:${pct}%"></div>
+              </div>
+              <span style="color:var(--muted)">${trust}%</span>
+            </div>`;
+        }).join('');
+
+        const sentiment = (data.sentiment_dist || []).map(s => {
+          const col = s.sentiment === 'bullish' ? 'var(--green)'
+                    : s.sentiment === 'bearish' ? 'var(--red)' : 'var(--yellow)';
+          return `<span style="color:${col}">${s.sentiment} ${s.cnt}</span>`;
+        }).join('  ');
+
+        el.innerHTML = totals + sources + (sentiment ? `<div class="mt-2 pt-2 text-xs" style="border-top:1px solid var(--border);color:var(--muted)">${sentiment}</div>` : '');
+      } catch (e) { /* not ready */ }
+    }
+
+    // ── TOML message viewer ────────────────────────────────────────────────────
+    let _tomlMessages = {};
+
+    function showToml(node) {
+      const viewer = document.getElementById('toml-viewer');
+      viewer.textContent = _tomlMessages[node] || '# No message yet for ' + node;
+      document.querySelectorAll('.toml-tab').forEach(b => {
+        b.style.color = b.dataset.node === node ? 'var(--green)' : 'var(--muted)';
+        b.style.borderBottomColor = b.dataset.node === node ? 'var(--green)' : 'transparent';
+      });
+    }
+
+    function initTomlTabs() {
+      const tabs = document.getElementById('toml-tabs');
+      tabs.innerHTML = ['fetch','parse','debate','score'].map(n => `
+        <button class="toml-tab text-xs px-2 py-1 border-b-2"
+          data-node="${n}"
+          style="color:var(--muted);border-color:transparent;transition:all .15s"
+          onclick="showToml('${n}')">${n.toUpperCase()}</button>
+      `).join('');
+    }
+
+    function updateTomlViewer(node, tomlStr) {
+      _tomlMessages[node] = tomlStr;
+      // Auto-show the latest node
+      showToml(node);
+    }
+
+    // ── Boot ──────────────────────────────────────────────────────────────────
     // Update index count on boot and after each run completes
     document.addEventListener('DOMContentLoaded', () => {
       renderPipelineSteps();
       renderQuickTopics();
       loadRuns();
       loadIndexCount();
+      loadSourceStats();
+      initTomlTabs();
     });
   </script>
 </body>
